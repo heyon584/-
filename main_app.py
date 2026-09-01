@@ -1,300 +1,294 @@
-import streamlit as st
-import cv2
-import numpy as np
-from PIL import Image, ImageOps
-import os
-import time
-import urllib.request
-import hashlib
 import base64
-from io import BytesIO
-from gtts import gTTS
-from concurrent.futures import ThreadPoolExecutor
+import os
+import gtts
+import numpy as np
+import cv2
+from PIL import Image
+import streamlit as st
 
-# --- 1. 페이지 기본 설정 및 컴팩트 레이아웃 / 수평 일렬 정렬 CSS ---
-st.set_page_config(page_title="🎉 축제 닮은꼴 부스", layout="wide")
+# ==========================================
+# 1. 페이지 기본 설정 및 스타일 (포디움 레이아웃 CSS)
+# ==========================================
+st.set_page_config(
+    page_title="닮은꼴 동물 찾기 부스", page_icon="🐾", layout="centered"
+)
 
-st.markdown("""
+st.markdown(
+    """
     <style>
-    .block-container {
-        padding-top: 0.2rem !important;
-        padding-bottom: 0rem !important;
-        max-width: 85% !important;
+    /* 전체 배경 및 폰트 설정 */
+    .main {
+        background-color: #f8f9fa;
     }
-    div[data-testid="stCameraInput"] video,
-    div[data-testid="stCameraInput"] img {
-        transform: scaleX(-1) !important;
-    }
-    header, footer { visibility: hidden; }
-
-    /* 화면 진동 */
-    @keyframes superShake {
-        0% { transform: translate(0, 0) rotate(0deg); }
-        20% { transform: translate(-4px, 3px) rotate(-1deg); }
-        40% { transform: translate(4px, -3px) rotate(1deg); }
-        60% { transform: translate(-3px, 2px) rotate(0deg); }
-        80% { transform: translate(3px, -2px) rotate(0deg); }
-        100% { transform: translate(0, 0) rotate(0deg); }
-    }
-
-    .shake-effect {
-        animation: superShake 0.5s ease-in-out;
-    }
-
-    /* 메인 1위 불꽃 네온 박스 */
-    @keyframes superFire {
-        0% { box-shadow: 0 0 10px #ff4500; border-color: #ff4500; }
-        50% { box-shadow: 0 0 20px #ff0000, 0 0 35px #ffd700; border-color: #ffd700; }
-        100% { box-shadow: 0 0 10px #ff4500; border-color: #ff4500; }
-    }
-
-    .fire-box {
-        border: 3px solid #ff4500;
-        border-radius: 8px;
-        padding: 2px;
-        animation: superFire 0.6s infinite alternate;
-        background: linear-gradient(180deg, rgba(255,0,0,0.25) 0%, rgba(255,140,0,0.1) 100%);
-        text-align: center;
-    }
-
-    .custom-divider {
-        border: 0;
-        height: 1px;
-        background: linear-gradient(to right, rgba(255,69,0,0), rgba(255,69,0,0.8), rgba(255,69,0,0));
-        margin: 4px 0;
-    }
-
-    /* 🎯 2위/3위 하단 여백 및 바닥 정렬 조절 (싱크로율 일렬 맞춤) */
-    [data-testid="stHorizontalBlock"] {
-        align-items: flex-end !important;
-    }
-
-    .side-podium-box {
+    
+    /* 포디움(시상대) 전체 컨테이너 */
+    .podium-container {
+        display: flex;
+        justify-content: center;
+        align-items: flex-end; /* 하단 라인 정렬 */
+        gap: 15px;
+        margin-top: 25px;
         margin-bottom: 25px;
     }
+    
+    /* 포디움 개별 카드의 공통 카드 스타일 */
+    .podium-card {
+        background-color: #ffffff;
+        border-radius: 16px;
+        padding: 15px;
+        text-align: center;
+        box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+        transition: transform 0.3s ease;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    /* 1등 전용 스타일 (가장 크고 높게) */
+    .podium-rank-1 {
+        width: 38%;
+        border: 3px solid #ffd700;
+        background: linear-gradient(180deg, #ffffff 0%, #fffdf0 100%);
+        transform: translateY(-10px);
+        z-index: 2;
+    }
+    
+    /* 2등, 3등 스타일 (1등 옆에 하단 맞춤) */
+    .podium-rank-2 {
+        width: 28%;
+        border: 2px solid #c0c0c0;
+        z-index: 1;
+    }
+    .podium-rank-3 {
+        width: 28%;
+        border: 2px solid #cd7f32;
+        z-index: 1;
+    }
+    
+    /* 이미지 둥글게 처리 및 배지 스타일 */
+    .podium-img {
+        width: 100%;
+        max-width: 120px;
+        height: 120px;
+        object-fit: cover;
+        border-radius: 50%;
+        margin-bottom: 10px;
+    }
+    
+    .badge {
+        font-weight: bold;
+        padding: 4px 12px;
+        border-radius: 12px;
+        color: white;
+        font-size: 0.9rem;
+        margin-bottom: 8px;
+    }
+    .badge-1 { background-color: #ffd700; color: #000; }
+    .badge-2 { background-color: #c0c0c0; }
+    .badge-3 { background-color: #cd7f32; }
+    
+    .score-text {
+        font-size: 1.1rem;
+        font-weight: 800;
+        color: #ff4b4b;
+    }
     </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-st.markdown("<h3 style='text-align: center; margin-bottom: 0px;'>🎉 나랑 닮은 꼴 찾기 부스</h3>", unsafe_allow_html=True)
 
-# --- 2. OpenCV 모델 안전 로드 ---
-CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
-
+# ==========================================
+# 2. 얼굴 인식 및 캐시 로드
+# ==========================================
 @st.cache_resource
 def load_face_cascade():
-    cascade_path = cv2.data.haarcascades + CASCADE_FILENAME
-    if not os.path.exists(cascade_path) or os.path.getsize(cascade_path) < 1000:
-        cascade_path = CASCADE_FILENAME
-        if not os.path.exists(cascade_path) or os.path.getsize(cascade_path) < 1000:
-            url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
-            urllib.request.urlretrieve(url, cascade_path)
+    cascade_path = (
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+    face_cascade = cv2.CascadeClassifier(cascade_path)
+    return face_cascade
 
-    cascade = cv2.CascadeClassifier(cascade_path)
-    return cascade
 
 face_cascade = load_face_cascade()
 
-# --- 3. 비교 대상 데이터베이스 ---
-TARGETS = {
-    "웃는 쿼카": {"path": "quokka.jpg", "desc": "보기만 해도 기분이 좋아지는 긍정 바이러스!"},
-    "장난꾸러기 고양이": {"path": "cat.jpg", "desc": "도도해 보이지만 끌리는 치명적 매력!"},
-    "친절한 리트리버": {"path": "dog.jpg", "desc": "누구에게나 호감을 주는 순수한 에너지!"}
-}
 
-# --- 4. 유틸리티 함수 ---
-def crop_to_square(img, size=(120, 120)):
-    return ImageOps.fit(img, size, Image.Resampling.LANCZOS)
+# ==========================================
+# 3. 이미지 특징 분석 및 유사도 계산 함수
+# ==========================================
+def extract_color_hist(img_pil):
+    """이미지의 HSV 컬러 히스토그램 추출"""
+    img_np = np.array(img_pil.convert("RGB"))
+    img_hsv = cv2.cvtColor(img_np, cv2.COLOR_RGB2HSV)
+    hist = cv2.calcHist([img_hsv], [0, 1], None, [180, 256], [0, 180, 0, 256])
+    cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
+    return hist
 
-def get_user_face_feature(image_np):
-    if face_cascade is None or face_cascade.empty():
-        return np.array([image_np.shape[1], image_np.shape[0], image_np.shape[1] / float(image_np.shape[0])])
-    try:
-        gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-        if len(faces) > 0:
-            x, y, w, h = max(faces, key=lambda b: b[2] * b[3])
-            return np.array([w, h, w / float(h)])
-    except Exception:
-        pass
-    return np.array([image_np.shape[1], image_np.shape[0], image_np.shape[1] / float(image_np.shape[0])])
 
-def process_target(item_with_userfeat_and_img):
-    item, u_feat, u_img_bytes = item_with_userfeat_and_img
-    name, info = item
-    
-    if not os.path.exists(info["path"]):
-        hash_val = int(hashlib.md5(name.encode()).hexdigest(), 16) % 30
-        return (float(hash_val), name)
-    
-    try:
-        target_img = Image.open(info["path"])
-        target_np = np.array(target_img)
-        
-        hsv_user = cv2.cvtColor(cv2.resize(np.array(Image.open(u_img_bytes)), (100, 100)), cv2.COLOR_RGB2HSV)
-        hsv_target = cv2.cvtColor(cv2.resize(target_np, (100, 100)), cv2.COLOR_RGB2HSV)
-        
-        hist_u = cv2.calcHist([hsv_user], [0, 1], None, [18, 25], [0, 180, 0, 256])
-        hist_t = cv2.calcHist([hsv_target], [0, 1], None, [18, 25], [0, 180, 0, 256])
-        
-        cv2.normalize(hist_u, hist_u, 0, 1, cv2.NORM_MINMAX)
-        cv2.normalize(hist_t, hist_t, 0, 1, cv2.NORM_MINMAX)
-        
-        sim_score = cv2.compareHist(hist_u, hist_t, cv2.HISTCMP_CORREL)
-        hash_val = int(hashlib.md5((name + str(u_feat[0])).encode()).hexdigest(), 16) % 15
-        final_score = float(sim_score) * 100 + hash_val
-        
-        return (final_score, name)
-    except Exception:
-        hash_val = int(hashlib.md5(name.encode()).hexdigest(), 16) % 30
-        return (float(hash_val), name)
+def calculate_similarity(face_crop_pil, target_img_path):
+    """얼굴 크롭 이미지와 대상 동물 이미지 간 유사도(0~100%) 계산"""
+    if not os.path.exists(target_img_path):
+        return 0.0
 
-# 🔊 로컬 drumroll.mp3 오디오 자동 재생
-def play_custom_drumroll():
-    audio_path = "drumroll.mp3"
+    target_pil = Image.open(target_img_path)
+
+    # 1. 히스토그램 유사도
+    h1 = extract_color_hist(face_crop_pil)
+    h2 = extract_color_hist(target_pil)
+    hist_sim = cv2.compareHist(h1, h2, cv2.HISTCMP_CORREL)
+    hist_sim = max(0, hist_sim)  # 음수 보정
+
+    # 2. 크기 및 밝기 기반 임의 변동 가산 (부스 재미 요소)
+    np.random.seed(int(face_crop_pil.size[0] + face_crop_pil.size[1]))
+    random_factor = np.random.uniform(0.6, 0.95)
+
+    final_score = (hist_sim * 40) + (random_factor * 60)
+    return round(min(99.9, max(50.0, final_score)), 1)
+
+
+# ==========================================
+# 4. 이미지 Base64 변환 (HTML 삽입용)
+# ==========================================
+def img_to_base64(img_path_or_pil):
+    if isinstance(img_path_or_pil, str):
+        if not os.path.exists(img_path_or_pil):
+            return ""
+        with open(img_path_or_pil, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    else:
+        import io
+
+        buffered = io.BytesIO()
+        img_path_or_pil.save(buffered, format="JPEG")
+        return base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+
+# ==========================================
+# 5. 음성(TTS) 및 드럼롤 자동 재생 생성 함수
+# ==========================================
+def play_audio_and_tts(text_to_speak, audio_path="drumroll.mp3"):
+    # 1. 드럼롤 오디오 B64
+    drumroll_b64 = ""
     if os.path.exists(audio_path):
         with open(audio_path, "rb") as f:
-            audio_bytes = f.read()
-            b64_audio = base64.b64encode(audio_bytes).decode()
-            js_code = f"""
-            <script>
-            var audio = new Audio("data:audio/mp3;base64,{b64_audio}");
-            audio.play().catch(function(e){{ console.log(e); }});
-            </script>
-            """
-            st.components.v1.html(js_code, height=0)
+            drumroll_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-# 🔊 1등 이름만 딱 자동으로 읽어주는 gTTS 내장 함수
-def play_name_tts(text_name):
-    tts = gTTS(text=text_name, lang='ko')
-    fp = BytesIO()
-    tts.write_to_fp(fp)
-    fp.seek(0)
-    b64_audio = base64.b64encode(fp.read()).decode()
-    js_code = f"""
-    <script>
-    var audio = new Audio("data:audio/mp3;base64,{b64_audio}");
-    audio.play().catch(function(e){{ console.log(e); }});
-    </script>
+    # 2. gTTS 음성 파일 생성
+    tts = gtts.gTTS(text=text_to_speak, lang="ko")
+    tts_file = "temp_tts.mp3"
+    tts.save(tts_file)
+
+    with open(tts_file, "rb") as f:
+        tts_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    # 3. 순차 재생 JavaScript 코드 (드럼롤 후 TTS 실행)
+    html_code = f"""
+        <audio id="drumroll" src="data:audio/mp3;base64,{drumroll_b64}"></audio>
+        <audio id="tts" src="data:audio/mp3;base64,{tts_b64}"></audio>
+        <script>
+            var drum = document.getElementById('drumroll');
+            var tts = document.getElementById('tts');
+            
+            if(drum && "{drumroll_b64}" !== "") {{
+                drum.play().catch(e => console.log("Autoplay blocked:", e));
+                drum.onended = function() {{
+                    tts.play().catch(e => console.log("TTS Autoplay blocked:", e));
+                }};
+            }} else {{
+                tts.play().catch(e => console.log("TTS Autoplay blocked:", e));
+            }}
+        </script>
     """
-    st.components.v1.html(js_code, height=0)
+    st.components.v1.html(html_code, height=0)
 
-# 💥 초강력 폭발 Confetti 연출
-def trigger_explosive_effect():
-    js_code = """
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
-    <script>
-    var duration = 2.0 * 1000;
-    var end = Date.now() + duration;
 
-    (function frame() {
-      confetti({ particleCount: 10, angle: 60, spread: 70, origin: { x: 0 } });
-      confetti({ particleCount: 10, angle: 120, spread: 70, origin: { x: 1 } });
-      if (Date.now() < end) { requestAnimationFrame(frame); }
-    })();
-    </script>
-    """
-    st.components.v1.html(js_code, height=0)
+# ==========================================
+# 6. 메인 앱 화면 구성
+# ==========================================
+st.title("🐾 닮은꼴 동물 찾기 부스")
+st.write("카메라로 얼굴을 촬영하여 나만의 닮은꼴 동물 순위를 확인하세요!")
 
-# --- 5. 웹캠 UI ---
-img_buffer = st.camera_input("웹캠 화면", key="webcam")
+# 비교 대상 동물 데이터 세팅
+animals = [
+    {"name": "쿼카", "file": "quokka.jpg"},
+    {"name": "고양이", "file": "cat.jpg"},
+    {"name": "강아지", "file": "dog.jpg"},
+]
 
-if img_buffer is not None:
-    user_img = Image.open(img_buffer)
-    user_np = np.array(user_img)
+# 카메라 입력
+camera_image = st.camera_input("카메라를 바라보고 촬영 버튼을 눌러주세요!")
 
-    user_np = cv2.flip(user_np, 1)
-    user_img = Image.fromarray(user_np)
+if camera_image:
+    img = Image.open(camera_image)
+    img_np = np.array(img.convert("RGB"))
+    gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
 
-    user_feat = get_user_face_feature(user_np)
+    # 얼굴 감지
+    faces = face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+    )
 
-    tasks = [(item, user_feat, img_buffer) for item in TARGETS.items()]
-    with ThreadPoolExecutor() as executor:
-        results = list(executor.map(process_target, tasks))
+    if len(faces) == 0:
+        st.warning(
+            "⚠️ 얼굴을 인식하지 못했습니다. 조명이 밝은 곳에서 다시 촬영해 주세요."
+        )
+    else:
+        # 가장 큰 얼굴 선택
+        (x, y, w, h) = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
+        face_crop = img.crop((x, y, x + w, y + h))
 
-    valid_results = [r for r in results if r is not None]
-    valid_results.sort(key=lambda x: x[0], reverse=True)
+        # 동물별 유사도 계산
+        results = []
+        for animal in animals:
+            score = calculate_similarity(face_crop, animal["file"])
+            results.append(
+                {
+                    "name": animal["name"],
+                    "score": score,
+                    "file": animal["file"],
+                    "b64": img_to_base64(animal["file"]),
+                }
+            )
 
-    target_names = [r[1] for r in valid_results]
-    default_scores = [92, 79, 64]
-    
-    scored_results = []
-    for i in range(3):
-        name = target_names[i] if i < len(target_names) else list(TARGETS.keys())[i]
-        scored_results.append((name, default_scores[i]))
+        # 점수 순으로 정렬 (1등, 2등, 3등)
+        results = sorted(results, key=lambda x: x["score"], reverse=True)
 
-    # --- 🥁 [5.5초 드럼롤 재생 대기] ---
-    waiting_placeholder = st.empty()
-    with waiting_placeholder.container():
-        st.markdown("<h4 style='text-align: center; color: #FF4500;'>🥁 과연 나랑 가장 닮은 꼴은?! 🥁</h4>", unsafe_allow_html=True)
-        col_w1, col_w2, col_w3 = st.columns([1.2, 1, 1.2])
-        with col_w2:
-            st.image(crop_to_square(user_img, (140, 140)), use_container_width=True)
+        rank_1 = results[0]
+        rank_2 = results[1]
+        rank_3 = results[2]
 
-    play_custom_drumroll()
-    time.sleep(5.5)
-    waiting_placeholder.empty()
+        st.subheader("🏆 닮은꼴 분석 결과")
 
-    # --- 💥 [5.5초 뒤 결과 발표] ---
-    top1_name, top1_sim = scored_results[0]
-    top2_name, top2_sim = scored_results[1]
-    top3_name, top3_sim = scored_results[2]
-
-    top1_info, top2_info, top3_info = TARGETS[top1_name], TARGETS[top2_name], TARGETS[top3_name]
-
-    # 폭발 연출 및 1위 이름만 자동 TTS 재생
-    trigger_explosive_effect()
-    play_name_tts(top1_name)
-
-    # 🏆 시상대 레이아웃
-    col_2nd, col_main, col_3rd = st.columns([1.0, 1.1, 1.0])
-
-    # 🥈 2위
-    with col_2nd:
-        st.markdown("<div class='side-podium-box'>", unsafe_allow_html=True)
-        st.markdown(f"""
-            <div style='text-align: center;'>
-                <p style='margin:0; font-weight:bold;'>🥈 2위</p>
-                <p style='margin:2px 0; font-size: 0.9rem;'><b>{top2_name}</b></p>
+        # HTML 시상대(Podium) 레이아웃 렌더링
+        podium_html = f"""
+        <div class="podium-container">
+            <!-- 2등 (왼쪽) -->
+            <div class="podium-card podium-rank-2">
+                <div class="badge badge-2">2위</div>
+                <img class="podium-img" src="data:image/jpeg;base64,{rank_2['b64']}">
+                <div style="font-weight:bold; font-size:1rem;">{rank_2['name']}</div>
+                <div class="score-text">{rank_2['score']}%</div>
             </div>
-        """, unsafe_allow_html=True)
-        if os.path.exists(top2_info["path"]):
-            img = Image.open(top2_info["path"])
-            st.image(crop_to_square(img, (100, 100)), use_container_width=True)
-        st.markdown(f"<p style='text-align: center; font-size: 0.85rem; font-weight: bold; margin: 0;'>싱크로율: {top2_sim}%</p>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # 📸 내 얼굴 + 🔥 1위 (중앙)
-    with col_main:
-        st.markdown("<p style='text-align: center; margin: 0; font-weight:bold; font-size: 0.9rem;'>📸 내 얼굴</p>", unsafe_allow_html=True)
-        col_m1, col_m2, col_m3 = st.columns([1, 2, 1])
-        with col_m2:
-            st.image(crop_to_square(user_img, (90, 90)), use_container_width=True)
-
-        st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
-
-        st.markdown(f"""
-            <div class="fire-box shake-effect">
-                <p style='margin:0; color: #FF4500; font-size: 0.85rem; font-weight:bold;'>🔥 1위 🔥</p>
-                <p style='margin:0; color: #FFFFFF; font-size: 1rem;'><b>{top1_name}</b></p>
+            
+            <!-- 1등 (중앙, 가장 높게) -->
+            <div class="podium-card podium-rank-1">
+                <div class="badge badge-1">👑 1위</div>
+                <img class="podium-img" src="data:image/jpeg;base64,{rank_1['b64']}">
+                <div style="font-weight:bold; font-size:1.2rem;">{rank_1['name']}</div>
+                <div class="score-text" style="font-size:1.4rem;">{rank_1['score']}%</div>
             </div>
-        """, unsafe_allow_html=True)
-        
-        if os.path.exists(top1_info["path"]):
-            img = Image.open(top1_info["path"])
-            st.image(crop_to_square(img, (120, 120)), use_container_width=True)
-        st.markdown(f"<p style='text-align: center; font-size: 0.9rem; font-weight: bold; margin: 2px 0;'>🔥 싱크로율: {top1_sim}%</p>", unsafe_allow_html=True)
-
-    # 🥉 3위
-    with col_3rd:
-        st.markdown("<div class='side-podium-box'>", unsafe_allow_html=True)
-        st.markdown(f"""
-            <div style='text-align: center;'>
-                <p style='margin:0; font-weight:bold;'>🥉 3위</p>
-                <p style='margin:2px 0; font-size: 0.9rem;'><b>{top3_name}</b></p>
+            
+            <!-- 3등 (오른쪽) -->
+            <div class="podium-card podium-rank-3">
+                <div class="badge badge-3">3위</div>
+                <img class="podium-img" src="data:image/jpeg;base64,{rank_3['b64']}">
+                <div style="font-weight:bold; font-size:1rem;">{rank_3['name']}</div>
+                <div class="score-text">{rank_3['score']}%</div>
             </div>
-        """, unsafe_allow_html=True)
-        if os.path.exists(top3_info["path"]):
-            img = Image.open(top3_info["path"])
-            st.image(crop_to_square(img, (100, 100)), use_container_width=True)
-        st.markdown(f"<p style='text-align: center; font-size: 0.85rem; font-weight: bold; margin: 0;'>싱크로율: {top3_sim}%</p>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+        </div>
+        """
+        st.markdown(podium_html, unsafe_allow_html=True)
+
+        # 결과 TTS 안내 및 효과음 실행
+        announce_text = f"축하합니다! 당신은 {rank_1['score']}% 확률로 {rank_1['name']}와 가장 닮았습니다!"
+        play_audio_and_tts(announce_text)
